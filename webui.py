@@ -167,6 +167,106 @@ def gen_single(emo_control_method,prompt, text,
                        **kwargs)
     return gr.update(value=output,visible=True)
 
+def gen_batch(batch_data, output_dir_option, custom_output_dir, progress=gr.Progress()):
+    """
+    Process batch inference for multiple triples of (reference, emotion, text).
+    
+    Args:
+        batch_data (str): CSV/JSON string or file containing batch data
+        output_dir_option (str): "auto" or "custom"
+        custom_output_dir (str): Custom output directory path
+        progress: Gradio progress tracker
+    """
+    import csv
+    import io
+    
+    if not batch_data or not batch_data.strip():
+        return "❌ No batch data provided", None
+    
+    # Set gradio progress
+    tts.gr_progress = progress
+    
+    try:
+        # Parse batch data (expecting CSV format with columns: spk_audio_prompt, text, emo_audio_prompt, emo_weight, etc.)
+        batch_inputs = []
+        
+        # Try to parse as CSV
+        try:
+            csv_reader = csv.DictReader(io.StringIO(batch_data.strip()))
+            for row in csv_reader:
+                if 'spk_audio_prompt' in row and 'text' in row:
+                    batch_item = {
+                        'spk_audio_prompt': row.get('spk_audio_prompt', '').strip(),
+                        'text': row.get('text', '').strip(),
+                        'emo_audio_prompt': row.get('emo_audio_prompt', '').strip() or None,
+                        'emo_alpha': float(row.get('emo_alpha', '1.0')),
+                        'emo_text': row.get('emo_text', '').strip() or None,
+                        'max_text_tokens_per_segment': int(row.get('max_text_tokens_per_segment', '120')),
+                    }
+                    if batch_item['spk_audio_prompt'] and batch_item['text']:
+                        batch_inputs.append(batch_item)
+        except Exception as e:
+            return f"❌ Error parsing CSV data: {str(e)}", None
+        
+        if not batch_inputs:
+            return "❌ No valid batch inputs found. Please ensure CSV has 'spk_audio_prompt' and 'text' columns.", None
+        
+        # Determine output directory
+        if output_dir_option == "custom" and custom_output_dir.strip():
+            output_dir = custom_output_dir.strip()
+        else:
+            output_dir = os.path.join("outputs", f"batch_{int(time.time())}")
+        
+        # Process batch
+        outputs = tts.infer_batch(
+            batch_inputs=batch_inputs,
+            output_dir=output_dir,
+            verbose=cmd_args.verbose,
+            # Default generation parameters
+            do_sample=True,
+            top_p=0.8,
+            top_k=30,
+            temperature=0.8,
+            length_penalty=0.0,
+            num_beams=3,
+            repetition_penalty=10.0,
+            max_mel_tokens=1500
+        )
+        
+        # Create result summary
+        successful_outputs = [o for o in outputs if o is not None]
+        failed_count = len(outputs) - len(successful_outputs)
+        
+        result_message = f"✅ Batch processing completed!\n"
+        result_message += f"📊 Total items: {len(batch_inputs)}\n"
+        result_message += f"✅ Successful: {len(successful_outputs)}\n"
+        result_message += f"❌ Failed: {failed_count}\n"
+        result_message += f"📁 Output directory: {output_dir}\n"
+        
+        if successful_outputs:
+            result_message += f"\n📋 Generated files:\n"
+            for i, output_path in enumerate(successful_outputs[:10]):  # Show first 10
+                if output_path:
+                    result_message += f"  {i+1}. {os.path.basename(output_path)}\n"
+            if len(successful_outputs) > 10:
+                result_message += f"  ... and {len(successful_outputs) - 10} more files\n"
+        
+        # Return the first successful output as sample
+        sample_output = None
+        for output in successful_outputs:
+            if output and os.path.exists(output):
+                sample_output = output
+                break
+                
+        return result_message, sample_output
+        
+    except Exception as e:
+        import traceback
+        error_msg = f"❌ Error during batch processing: {str(e)}\n"
+        if cmd_args.verbose:
+            error_msg += f"\nTraceback:\n{traceback.format_exc()}"
+        return error_msg, None
+
 def update_prompt_audio():
     update_button = gr.update(interactive=True)
     return update_button
@@ -395,6 +495,84 @@ with gr.Blocks(title="IndexTTS Demo") as demo:
                      ],
                      outputs=[output_audio])
 
+    # Batch Processing Tab
+    with gr.Tab(i18n("批量生成")):
+        gr.Markdown(f"### {i18n('批量音频生成')}")
+        gr.Markdown(i18n("上传包含多个音频生成任务的CSV文件，支持批量处理多组 (参考音频, 情感音频, 文本) 的组合。"))
+        
+        with gr.Row():
+            with gr.Column(scale=2):
+                batch_input = gr.TextArea(
+                    label=i18n("批量数据 (CSV格式)"),
+                    placeholder="""spk_audio_prompt,text,emo_audio_prompt,emo_alpha,emo_text,max_text_tokens_per_segment
+examples/sample_prompt.wav,"Hello world, this is a test.",examples/emo_sample.wav,1.0,"happy",120
+examples/sample_prompt2.wav,"Another test sentence.",examples/emo_sample2.wav,0.8,"excited",100""",
+                    lines=10,
+                    info=i18n("请输入CSV格式的批量数据。必需列: spk_audio_prompt, text。可选列: emo_audio_prompt, emo_alpha, emo_text, max_text_tokens_per_segment")
+                )
+                
+                with gr.Row():
+                    output_dir_option = gr.Radio(
+                        choices=["auto", "custom"],
+                        value="auto",
+                        label=i18n("输出目录选择"),
+                        info=i18n("auto: 自动生成目录，custom: 自定义目录")
+                    )
+                    custom_output_dir = gr.Textbox(
+                        label=i18n("自定义输出目录"),
+                        placeholder="outputs/my_batch",
+                        visible=False
+                    )
+                
+                batch_gen_button = gr.Button(i18n("开始批量生成"), variant="primary")
+                
+            with gr.Column(scale=1):
+                batch_result = gr.TextArea(
+                    label=i18n("批量处理结果"),
+                    lines=10,
+                    interactive=False
+                )
+                batch_sample_output = gr.Audio(
+                    label=i18n("示例输出"),
+                    visible=True
+                )
+        
+        # Add example CSV data
+        with gr.Accordion(i18n("CSV格式说明"), open=False):
+            gr.Markdown("""
+            **必需列:**
+            - `spk_audio_prompt`: 音色参考音频文件路径
+            - `text`: 要合成的文本内容
+            
+            **可选列:**
+            - `emo_audio_prompt`: 情感参考音频文件路径
+            - `emo_alpha`: 情感权重 (0.0-1.0, 默认1.0)
+            - `emo_text`: 情感描述文本
+            - `max_text_tokens_per_segment`: 分句最大Token数 (默认120)
+            
+            **示例CSV:**
+            ```csv
+            spk_audio_prompt,text,emo_audio_prompt,emo_alpha,emo_text,max_text_tokens_per_segment
+            examples/speaker1.wav,"Hello, how are you?",examples/happy.wav,1.0,"cheerful",120
+            examples/speaker2.wav,"This is another test.",examples/sad.wav,0.8,"melancholic",100
+            ```
+            """)
+        
+        # Event handlers for batch tab
+        def update_custom_dir_visibility(option):
+            return gr.update(visible=(option == "custom"))
+        
+        output_dir_option.change(
+            update_custom_dir_visibility,
+            inputs=[output_dir_option],
+            outputs=[custom_output_dir]
+        )
+        
+        batch_gen_button.click(
+            gen_batch,
+            inputs=[batch_input, output_dir_option, custom_output_dir],
+            outputs=[batch_result, batch_sample_output]
+        )
 
 
 if __name__ == "__main__":
