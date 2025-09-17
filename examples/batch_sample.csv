@@ -1,0 +1,5 @@
+spk_audio_prompt,text,emo_audio_prompt,emo_alpha,emo_text,max_text_tokens_per_segment
+examples/voice_01.wav,"Hello world, this is a test of batch processing.",examples/emo_sad.wav,1.0,"neutral",120
+examples/voice_02.wav,"This is another sentence for testing.",examples/emo_hate.wav,0.8,"angry",100
+examples/voice_03.wav,"A third example sentence.",,1.0,"",150
+examples/voice_04.wav,"Final test sentence with different parameters.",,0.6,"calm",80

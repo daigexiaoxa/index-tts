@@ -608,6 +608,116 @@ class IndexTTS2:
             wav_data = wav_data.numpy().T
             return (sampling_rate, wav_data)
 
+    def infer_batch(self, batch_inputs, output_dir=None, verbose=False, **generation_kwargs):
+        """
+        Batch inference for multiple triples of (spk_audio_prompt, emo_audio_prompt, text).
+        
+        Args:
+            batch_inputs (list): List of dictionaries, each containing:
+                - spk_audio_prompt (str): Path to speaker audio prompt
+                - text (str): Text to synthesize  
+                - emo_audio_prompt (str, optional): Path to emotion reference audio
+                - emo_alpha (float, optional): Emotion weight, default 1.0
+                - emo_vector (list, optional): Emotion vector
+                - use_emo_text (bool, optional): Use emotion text, default False
+                - emo_text (str, optional): Emotion description text
+                - use_random (bool, optional): Use random emotion, default False
+                - max_text_tokens_per_segment (int, optional): Max tokens per segment, default 120
+            output_dir (str, optional): Directory to save outputs. If None, returns audio data.
+            verbose (bool): Enable verbose logging
+            **generation_kwargs: Additional generation parameters
+            
+        Returns:
+            list: List of output paths (if output_dir specified) or audio data tuples
+        """
+        if not batch_inputs:
+            return []
+            
+        print(f">> Starting batch inference for {len(batch_inputs)} items...")
+        self._set_gr_progress(0, f"Starting batch inference for {len(batch_inputs)} items...")
+        
+        outputs = []
+        start_time = time.perf_counter()
+        
+        for i, batch_item in enumerate(batch_inputs):
+            # Extract parameters for this batch item
+            spk_audio_prompt = batch_item.get('spk_audio_prompt')
+            text = batch_item.get('text')
+            emo_audio_prompt = batch_item.get('emo_audio_prompt', None)
+            emo_alpha = batch_item.get('emo_alpha', 1.0)
+            emo_vector = batch_item.get('emo_vector', None)
+            use_emo_text = batch_item.get('use_emo_text', False)
+            emo_text = batch_item.get('emo_text', None)
+            use_random = batch_item.get('use_random', False)
+            max_text_tokens_per_segment = batch_item.get('max_text_tokens_per_segment', 120)
+            interval_silence = batch_item.get('interval_silence', 200)
+            
+            if not spk_audio_prompt or not text:
+                print(f">> Skipping batch item {i+1}: missing spk_audio_prompt or text")
+                continue
+                
+            # Determine output path
+            if output_dir:
+                os.makedirs(output_dir, exist_ok=True)
+                output_path = os.path.join(output_dir, f"batch_output_{i+1}_{int(time.time())}.wav")
+            else:
+                output_path = None
+                
+            # Update progress
+            progress_value = i / len(batch_inputs)
+            self._set_gr_progress(progress_value, f"Processing item {i+1}/{len(batch_inputs)}: {text[:50]}...")
+            
+            if verbose:
+                print(f">> Processing batch item {i+1}/{len(batch_inputs)}")
+                print(f"   spk_audio_prompt: {spk_audio_prompt}")
+                print(f"   text: {text[:100]}...")
+                print(f"   emo_audio_prompt: {emo_audio_prompt}")
+                print(f"   emo_alpha: {emo_alpha}")
+                
+            try:
+                # Call the regular infer method for each item
+                result = self.infer(
+                    spk_audio_prompt=spk_audio_prompt,
+                    text=text,
+                    output_path=output_path,
+                    emo_audio_prompt=emo_audio_prompt,
+                    emo_alpha=emo_alpha,
+                    emo_vector=emo_vector,
+                    use_emo_text=use_emo_text,
+                    emo_text=emo_text,
+                    use_random=use_random,
+                    interval_silence=interval_silence,
+                    verbose=verbose,
+                    max_text_tokens_per_segment=max_text_tokens_per_segment,
+                    **generation_kwargs
+                )
+                outputs.append(result)
+                
+                if verbose:
+                    print(f"   Successfully processed item {i+1}")
+                    
+            except Exception as e:
+                print(f">> Error processing batch item {i+1}: {str(e)}")
+                if verbose:
+                    import traceback
+                    traceback.print_exc()
+                outputs.append(None)
+                
+        end_time = time.perf_counter()
+        total_time = end_time - start_time
+        successful_items = len([x for x in outputs if x is not None])
+        
+        print(f">> Batch inference completed:")
+        print(f"   Total items: {len(batch_inputs)}")
+        print(f"   Successful: {successful_items}")
+        print(f"   Failed: {len(batch_inputs) - successful_items}")
+        print(f"   Total time: {total_time:.2f} seconds")
+        print(f"   Average time per item: {total_time / len(batch_inputs):.2f} seconds")
+        
+        self._set_gr_progress(1.0, f"Batch inference completed: {successful_items}/{len(batch_inputs)} successful")
+        
+        return outputs
+
 
 def find_most_similar_cosine(query_vector, matrix):
     query_vector = query_vector.float()
