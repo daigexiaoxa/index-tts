@@ -65,7 +65,7 @@ dependencies = [
 [project.optional-dependencies]
 # To install the WebUI support, use `uv sync --extra webui` (or `--all-extras`).
 webui = [
-  "gradio==5.44.1",
+  "gradio==5.45.0",
 ]
 # To install the DeepSpeed support, use `uv sync --extra deepspeed` (or `--all-extras`).
 deepspeed = [
@@ -88,6 +88,10 @@ build-backend = "hatchling.build"
 
 [tool.uv]
 # Disable build isolation when building DeepSpeed from source.
+# NOTE: This is *necessary* so that DeepSpeed builds directly within our `.venv`,
+# and finds our CUDA-enabled version of PyTorch, which DeepSpeed *needs* during
+# its compilation to determine what GPU support to compile for itself. It also
+# saves time, since it won't waste time downloading a generic PyTorch version.
 no-build-isolation-package = ["deepspeed"]
 
 [tool.uv.sources]
